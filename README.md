@@ -1,6 +1,6 @@
 # DAV-semestralka-nehody-v-CR
-Semestrálna práca z predmetu Databázová analytika a výkonnosť (DAV).
-Zamerané na:
-  * indexy
-  * agregačné funkcie (redukujúce veľkosť dataset-u)
-  * analytické funkcie (neredukujúce veľkosť dataset-u)
+Semestral work from subject Database analytics and performance (DAV-Databázová analytika a výkonnosť).
+Focused on:
+  * aggregate functions (reducing dataset's size)
+  * analytic functions  (not reducing dataset's size)
+  * indexes
