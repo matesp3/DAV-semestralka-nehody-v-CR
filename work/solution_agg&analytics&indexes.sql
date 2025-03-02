@@ -1,7 +1,7 @@
 BEGIN
 	dbms_stats.gather_schema_stats('POLJAK');
 END;
-/
+--/
 -- 
 
 select 'Pocet autonehod za rok:' as popis,
