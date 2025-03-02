@@ -19,13 +19,16 @@ from cr_vozidla
 
 --01===================================================================================================
 -- mesiace s najviac umrtiami pre kazdy kraj za rok 2024
---v1: cost 2575, bytes 68400
+--v1: cost 1530
 SELECT kraj, mesiac, mrtvych
 FROM (
-	SELECT kk.id_kraj, kk.nazov kraj, TO_CHAR(nn.cas, 'Mon','NLS_DATE_LANGUAGE=Slovak') AS mesiac, sum(nn.mrtvi) AS mrtvych
+	SELECT kk.id_kraj, kk.nazov kraj, TO_CHAR(nn.cas, 'Mon','NLS_DATE_LANGUAGE=Slovak') AS mesiac,
+    extract(month from cas) as mesiac_id,
+    sum(nn.mrtvi) AS mrtvych
 	 FROM CR_NEHODY nn
 	  JOIN cr_kraje kk ON nn.id_kraj = kk.id_kraj
-	    GROUP BY kk.id_kraj, kk.nazov, TO_CHAR(nn.cas, 'Mon','NLS_DATE_LANGUAGE=Slovak')
+       where extract(year from cas)=2024
+	    GROUP BY kk.id_kraj, kk.nazov, extract(month from cas), TO_CHAR(nn.cas, 'Mon','NLS_DATE_LANGUAGE=Slovak')
  ) main
   WHERE EXISTS (SELECT 1
   				FROM (
@@ -33,40 +36,50 @@ FROM (
                        FROM (
                             SELECT ID_KRAJ, sum(mrtvi) AS poc_mrtvi
                              FROM cr_nehody
-                              GROUP BY ID_KRAJ, EXTRACT(MONTH FROM cas)
+                              where extract(year from cas)=2024
+                               GROUP BY ID_KRAJ, EXTRACT(MONTH FROM cas)
                             )
                         GROUP BY id_kraj
                      ) tmp
                  WHERE main.id_kraj = tmp.id_kraj AND main.mrtvych = tmp.mrtvych
                 )
-    ORDER BY mrtvych desc, kraj;
+    ORDER BY mrtvych desc, kraj, mesiac_id;
 
 
- --v2: cost 3583, bytes 798
-SELECT DISTINCT kraj, mesiac, mrtvych
-FROM (
-	SELECT kraj, mesiac, mrtvych, dense_rank() OVER (PARTITION BY kraj ORDER BY mrtvych desc) AS rnk
-	FROM (
-		SELECT k.nazov AS kraj, extract(MONTH FROM cas) AS mesiac, 
-		 sum(n.mrtvi) OVER (PARTITION BY k.id_kraj, EXTRACT(MONTH FROM cas) ORDER BY null) AS mrtvych
-		 FROM cr_nehody n
-		  JOIN cr_kraje k ON n.id_kraj = k.id_kraj
-	 )
-) WHERE rnk = 1
- ORDER BY mrtvych DESC, kraj;
-
- --v3: cost 1294, bytes 784
+ --v2: cost 769
+select kraj, mesiac, mrtvych
+ from (
+    SELECT DISTINCT kraj, mesiac, mrtvych, mesiac_id
+     FROM (
+        SELECT kraj, mesiac, mrtvych, dense_rank() OVER (PARTITION BY kraj ORDER BY mrtvych desc) AS rnk, 
+                mesiac_id
+        FROM (
+            SELECT k.nazov AS kraj, TO_CHAR(n.cas, 'Mon','NLS_DATE_LANGUAGE=Slovak') AS mesiac, 
+             sum(n.mrtvi) OVER (PARTITION BY k.id_kraj, EXTRACT(MONTH FROM cas) ORDER BY null) AS mrtvych,
+             extract (month from n.cas) as mesiac_id
+             FROM cr_nehody n
+              JOIN cr_kraje k ON n.id_kraj = k.id_kraj
+               where extract(year from cas)=2024
+         )
+     ) WHERE rnk = 1
+      ORDER BY mrtvych DESC, kraj, mesiac_id
+ );
+ 
+ --v3: cost 768
 SELECT kraj, mesiac, mrtvych
 FROM (
-	SELECT kraj, mesiac, mrtvych, dense_rank() OVER (PARTITION BY kraj ORDER BY mrtvych desc) AS rnk
+	SELECT kraj, mesiac, mrtvych, dense_rank() OVER (PARTITION BY kraj ORDER BY mrtvych desc) AS rnk,
+            mesiac_id
 	FROM (
-		SELECT k.nazov AS kraj, extract(MONTH FROM cas) AS mesiac, 
-		 sum(n.mrtvi) OVER (PARTITION BY k.id_kraj, EXTRACT(MONTH FROM cas) ORDER BY null) AS mrtvych
+		 SELECT k.nazov AS kraj, TO_CHAR(n.cas, 'Mon','NLS_DATE_LANGUAGE=Slovak') AS mesiac, 
+		 sum(n.mrtvi) AS mrtvych, extract(month from cas) as mesiac_id
 		 FROM cr_nehody n
 		  JOIN cr_kraje k ON n.id_kraj = k.id_kraj
-	 ) GROUP BY kraj, mesiac, mrtvych -- redukcia nepotrebnych duplicit, ktore su dosledkom analytickej fcie
+           where extract(year from cas)=2024
+            group by k.nazov, extract(month from cas), TO_CHAR(n.cas, 'Mon','NLS_DATE_LANGUAGE=Slovak') -- redukcia nepotrebnych duplicit, ktore su dosledkom analytickej fcie
+	 ) 
 ) WHERE rnk = 1
- ORDER BY mrtvych DESC, kraj;
+ ORDER BY mrtvych DESC, kraj, mesiac_id;
  --===================================================================================================
  --02=================================================================================================
  -- 3. mesiac s najvacsim poctom nehod
@@ -74,41 +87,51 @@ FROM (
  --v1:
  select extract(month from cas) as month, count(*) as poc_nehod
   from cr_nehody
-   group by extract(month from cas)
-    order by poc_nehod desc;
+   where extract(year from cas)=2024
+    group by extract(month from cas)
+     order by poc_nehod desc;
     
---v1: cost: 383 | vnorene selecty na ziskanie lokalneho maxima
-select extract(month from cas) as month, count(*) as poc_nehod
+--v1: cost: 763 | vnorene selecty na ziskanie lokalneho maxima
+select 'Top 3. najviac nehod (2024): ' as popis,
+ TO_CHAR(cas, 'Mon','NLS_DATE_LANGUAGE=Slovak') as mesiac, count(*) as poc_nehod
   from cr_nehody
-   group by extract(month from cas)
-    having count(*) = (select max(count(*))
+   where extract(year from cas)=2024
+    group by TO_CHAR(cas, 'Mon','NLS_DATE_LANGUAGE=Slovak')
+     having count(*) = (select max(count(*))
                         from cr_nehody
-                         group by extract(month from cas)
-                          having count(*) < (select max(count(*))
+                         where extract(year from cas)=2024
+                          group by extract(month from cas)
+                           having count(*) < (select max(count(*))
                                               from cr_nehody
-                                               group by extract(month from cas)
-                                                having count(*) < (select max(count(*))
+                                               where extract(year from cas)=2024
+                                                group by extract(month from cas)
+                                                 having count(*) < (select max(count(*))
                                                                     from cr_nehody
-                                                                     group by extract(month from cas)
-                                                                  )
-                                            )
+                                                                     where extract(year from cas)=2024
+                                                                      group by extract(month from cas)
+                                                                    )
+                                              )
                        );
- --v2: cost: 2309 | pouzitie fetch so zoradenim
- select extract(month from cas) as month, count(*) as poc_nehod
+                       
+ --v2: cost: 766 | pouzitie fetch so zoradenim
+ select 'Top 3. najviac nehod (2024): ' as popis, TO_CHAR(cas, 'Mon','NLS_DATE_LANGUAGE=Slovak') as month,
+  count(*) as poc_nehod
   from cr_nehody
-   group by extract(month from cas)
-    order by poc_nehod desc 
-     offset 2 rows fetch first row with ties;
+   where extract(year from cas)=2024
+    group by TO_CHAR(cas, 'Mon','NLS_DATE_LANGUAGE=Slovak')
+     order by poc_nehod desc 
+      offset 2 rows fetch first row with ties;
      
- --v3: cost: 1020 | vyuzitie analytickej funkcie dense_rank
- select mesiac, poc_nehod
+ --v3: cost: 764 | vyuzitie analytickej funkcie dense_rank
+ select 'Top 3. najviac nehod (2024): ' as popis, mesiac, poc_nehod
  from (
      select mesiac, poc_nehod,
             dense_rank() over (order by poc_nehod desc) rnk
      from (
-         select extract(month from cas) as mesiac, count(*) as poc_nehod
+         select TO_CHAR(cas, 'Mon','NLS_DATE_LANGUAGE=Slovak') as mesiac, count(*) as poc_nehod
           from cr_nehody
-           group by extract(month from cas)
+           where extract(year from cas)=2024
+            group by TO_CHAR(cas, 'Mon','NLS_DATE_LANGUAGE=Slovak')
        )
 ) where rnk = 3;
 
@@ -131,87 +154,114 @@ select case when al.pritomny='A' then 'Ano'
             when al.pritomny='O' then 'Odmietnute'
             when al.pritomny='X' then 'Nezistovane'
             else 'Nezname' end as alkohol_bol_pritomny,
-    al.obsah_perc as obsah_alkoholu_v_krvi_pri_nehode, count(*) as poc_zavinenych_nehod
+    al.obsah_perc as obsah_alkoholu_v_krvi_pri_nehode,
+    count(*) as poc_zavinenych_nehod
  from cr_nehody n
  join cr_pritomnost_alko al on n.id_alko_prit = al.id_stav
+  where extract(year from cas)=2024
    group by al.id_stav, al.pritomny, al.obsah_perc
     order by poc_zavinenych_nehod desc;
  
+ 
+ 
 -- pivotova transformacia pre mesiace
- select TO_CHAR(cas, 'Month','NLS_DATE_LANGUAGE=Slovak') as mesiac,
-            sum(case al.pritomny when 'A' then 1 else 0 end) as alko_ano,
-            sum(case al.pritomny when 'N' then 1 else 0 end) as alko_nie,
-            sum(case al.pritomny when 'O' then 1 else 0 end) as alko_odm,
-            sum(case al.pritomny when 'X' then 1 else 0 end) as alko_nez
-  from cr_nehody n
-  join cr_pritomnost_alko al on n.id_alko_prit = al.id_stav
-   group by extract(month from cas), TO_CHAR(cas, 'Month','NLS_DATE_LANGUAGE=Slovak')
-    order by extract(month from cas);
+select mesiac, ' Pocty: ' as popis1, alko_ano, alko_nie, alko_odm, alko_nez,
+        ' Percenta: ' as popis2,
+        round(100*alko_ano/mes_all,2)||'%' as p_alko_ano,
+        round(100*alko_nie/mes_all,2)||'%' as p_alko_nie,
+        round(100*alko_odm/mes_all,2)||'%' as p_alko_odm,
+        round(100*alko_nez/mes_all,2)||'%' as p_alko_nez
+ from (
+     select extract(month from cas) as mesiac_id,
+                TO_CHAR(cas, 'Month','NLS_DATE_LANGUAGE=Slovak') as mesiac,
+                sum(case al.pritomny when 'A' then 1 else 0 end) as alko_ano,
+                sum(case al.pritomny when 'N' then 1 else 0 end) as alko_nie,
+                sum(case al.pritomny when 'O' then 1 else 0 end) as alko_odm,
+                sum(case al.pritomny when 'X' then 1 else 0 end) as alko_nez,
+                count(*) as mes_all
+      from cr_nehody n
+      join cr_pritomnost_alko al on n.id_alko_prit = al.id_stav
+       where extract(year from cas)=2024
+        group by extract(month from cas), TO_CHAR(cas, 'Month','NLS_DATE_LANGUAGE=Slovak')
+ )
+  order by mesiac_id;
+  
+  
 -- uloha 1: aky je percentualny pomer 15 najhorsich skod sposobenych alkoholom k 15 15 najhorsich skoda sposobene lubovolnym druhom
  select 5/2 from dual;
  
-select a, b, a/b from (
- select
- (select 5 from dual) a,
- (select 2 from dual) b
-  from dual
-);
+--select skoda_alko, skoda_celkom, round(100*skoda_alko/skoda_celkom, 2) as perc_podiel from (
+-- select
+-- (select x from dual) as skoda_alko,
+-- (select y from dual) as skoda_celkom
+--  from dual
+--);
 
 -- v1 - celkova skoda vypocitana z 15 najvacsich nehod lubovolneho druhu
-select suma          --v1(analytic) cost: 645
+select suma_kc          --v1(analytic) cost: 763
  from (
      select celk_skoda_kc as skoda,
-        row_number() over(order by celk_skoda_kc desc) as rn, -- sem rownumber, lebo chcem len cislo 15 najhorsich, netrapi ma, ak na 15 a 16 mieste boli rovnakej sumy
-        sum(celk_skoda_kc) over (order by celk_skoda_kc desc) as suma
+        row_number() over(order by celk_skoda_kc desc) as rn,
+        sum(celk_skoda_kc) over (order by celk_skoda_kc desc) as suma_kc
       from cr_nehody
+       where extract(year from cas)=2024
  ) where rn = 1000;
   
 -- v2 - celkova skoda vypocitana z 15 najvacsich nehod lubovolneho druhu
-select sum(skoda) suma --v2(aggregate) cost: 645
+select sum(skoda) suma_kc --v2(aggregate) cost: 763
  from (
     select celk_skoda_kc as skoda,
-        row_number() over(order by celk_skoda_kc desc) as rn -- sem rownumber, lebo chcem len cislo 15 najhorsich, netrapi ma, ak na 15 a 16 mieste boli rovnakej sumy
+        row_number() over(order by celk_skoda_kc desc) as rn
       from cr_nehody
+       where extract(year from cas)=2024
  ) where rn <= 1000;   
 
 
--- v1 celkova skoda vypocitana z 15 najvacsich nehod so zistenym obsahom alkoholu v krvi
-select sum(skoda) over() as suma --v1(analytic) cost: 806;
+-- v1 celkova skoda vypocitana z 1000 najvacsich nehod so zistenym obsahom alkoholu v krvi
+select sum(skoda) over() as suma_kc --v1(analytic) cost: 766;
  from (
     select a.pritomny as alko_pritomny, celk_skoda_kc as skoda,
-        row_number() over(order by celk_skoda_kc desc) as rn -- sem rownumber, lebo chcem len cislo 15 najhorsich, netrapi ma, ak na 15 a 16 mieste boli rovnakej sumy
+        row_number() over(order by celk_skoda_kc desc) as rn
       from cr_nehody n
-      join cr_pritomnost_alko a on n.id_alko_prit = a.id_stav
+       join cr_pritomnost_alko a on n.id_alko_prit = a.id_stav
+        where extract(year from cas)=2024
  ) where rn <= 1000 and alko_pritomny='A'
    fetch first row only;
 
--- v2 celkova skoda vypocitana z 15 najvacsich nehod so zistenym obsahom alkoholu v krvi
-select sum(skoda) suma    --v2(aggregate) cost: 806
+-- v2 celkova skoda vypocitana z 1000 najvacsich nehod so zistenym obsahom alkoholu v krvi
+select sum(skoda) suma_kc    --v2(aggregate) cost: 766
  from (
     select a.pritomny as alko_pritomny, celk_skoda_kc as skoda,
-        row_number() over(order by celk_skoda_kc desc) as rn -- sem rownumber, lebo chcem len cislo 15 najhorsich, netrapi ma, ak na 15 a 16 mieste boli rovnakej sumy
+        row_number() over(order by celk_skoda_kc desc) as rn
       from cr_nehody n
-      join cr_pritomnost_alko a on n.id_alko_prit = a.id_stav
+       join cr_pritomnost_alko a on n.id_alko_prit = a.id_stav
+        where extract(year from cas)=2024
  ) where rn <= 1000 and alko_pritomny='A';
  
 -- z prvych 1000 najnakladnejsich nehod kolkymi percentami sa na nich podielali nehody s pritomnostou alkoholu. Celkovo vyse 90000 nehod, cize vyberame len z 1.1 % nehod zo vsetkych
-select sum_kc_alko, sum_kc_celk, round(100*(sum_kc_alko/sum_kc_celk),3) || '%' as podiel_zavinenych_alko, sum_kc_celk-sum_kc_alko
+-- cost: 1531
+select 'Podiel skody s pritom. alko vramci TOP 1000:' as popis,
+ round(100*(sum_kc_alko/sum_kc_celk),3) || '%' as perc, sum_kc_alko, sum_kc_celk
 from ( 
   select 
-    (select sum(skoda) suma   --v2(aggregate) cost: 806
+    (select sum(skoda) suma_kc    --v2(aggregate) cost: 766
       from (
         select a.pritomny as alko_pritomny, celk_skoda_kc as skoda,
-            row_number() over(order by celk_skoda_kc desc) as rn -- sem rownumber, lebo chcem len cislo 15 najhorsich, netrapi ma, ak na 15 a 16 mieste boli rovnakej sumy
+            row_number() over(order by celk_skoda_kc desc) as rn
           from cr_nehody n
-          join cr_pritomnost_alko a on n.id_alko_prit = a.id_stav
-     ) where rn <= 1000 and alko_pritomny='A') sum_kc_alko, 
-    (select sum(skoda) suma  --v2(aggregate) cost: 645
+           join cr_pritomnost_alko a on n.id_alko_prit = a.id_stav
+            where extract(year from cas)=2024
+           ) where rn <= 1000 and alko_pritomny='A'
+    ) sum_kc_alko, 
+    (select sum(skoda) suma_kc --v2(aggregate) cost: 763
       from (
         select celk_skoda_kc as skoda,
-            row_number() over(order by celk_skoda_kc desc) as rn -- sem rownumber, lebo chcem len cislo 15 najhorsich, netrapi ma, ak na 15 a 16 mieste boli rovnakej sumy
+            row_number() over(order by celk_skoda_kc desc) as rn
           from cr_nehody
-     ) where rn <= 1000) sum_kc_celk from dual
-);
+           where extract(year from cas)=2024
+           ) where rn <= 1000
+     ) sum_kc_celk
+      from dual);
    
 
 --===================================================================================================
