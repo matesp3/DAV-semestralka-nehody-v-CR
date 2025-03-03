@@ -1,1 +1,1 @@
-This is just an example of imported data, not all used in semestral work.
+This is just an example of imported data, not all used in semester work.
