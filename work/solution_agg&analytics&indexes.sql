@@ -1,9 +1,13 @@
 BEGIN
 	dbms_stats.gather_schema_stats('POLJAK');
 END;
---/
--- 
+/
 
+--===================================================================================================
+--                A N A L Y T I C K E   S P R A C O V A N I E   D A T
+--===================================================================================================
+
+--00
 select 'Pocet autonehod za rok:' as popis,
  sum(case extract(year from cas) when 2023 then 1 else 0 end) as count_2023,
  sum(case extract(year from cas) when 2024 then 1 else 0 end) as count_2024,
@@ -84,7 +88,7 @@ FROM (
  --02=================================================================================================
  -- 3. mesiac s najvacsim poctom nehod
  
- --v1:
+ --v1: na skontrolovanie 3. v poradi s vypisom umiestneni pre vsetky mesiace
  select extract(month from cas) as month, count(*) as poc_nehod
   from cr_nehody
    where extract(year from cas)=2024
@@ -162,8 +166,7 @@ select case when al.pritomny='A' then 'Ano'
    group by al.id_stav, al.pritomny, al.obsah_perc
     order by poc_zavinenych_nehod desc;
  
- 
- 
+--===================================================================================================
 -- pivotova transformacia pre mesiace
 select mesiac, ' Pocty: ' as popis1, alko_ano, alko_nie, alko_odm, alko_nez,
         ' Percenta: ' as popis2,
@@ -186,18 +189,16 @@ select mesiac, ' Pocty: ' as popis1, alko_ano, alko_nie, alko_odm, alko_nez,
  )
   order by mesiac_id;
   
-  
--- uloha 1: aky je percentualny pomer 15 najhorsich skod sposobenych alkoholom k 15 15 najhorsich skoda sposobene lubovolnym druhom
- select 5/2 from dual;
- 
---select skoda_alko, skoda_celkom, round(100*skoda_alko/skoda_celkom, 2) as perc_podiel from (
--- select
--- (select x from dual) as skoda_alko,
--- (select y from dual) as skoda_celkom
---  from dual
---);
+--===================================================================================================
+-- uloha 1: aky je percentualny pomer najhorsich skod sposobenych alkoholom z TOP 1000 vseobecne k tymto TOP 1000 najhorsich skod sposobenych lubovolnym druhom 
+select skoda_alko, skoda_celkom, round(100*skoda_alko/skoda_celkom, 2) as perc_podiel from (
+ select
+ (select 1 from dual) as skoda_alko,
+ (select 2 from dual) as skoda_celkom
+  from dual
+);
 
--- v1 - celkova skoda vypocitana z 15 najvacsich nehod lubovolneho druhu
+-- v1 - celkova skoda vypocitana z 1000 najvacsich nehod lubovolneho druhu
 select suma_kc          --v1(analytic) cost: 763
  from (
      select celk_skoda_kc as skoda,
@@ -207,7 +208,7 @@ select suma_kc          --v1(analytic) cost: 763
        where extract(year from cas)=2024
  ) where rn = 1000;
   
--- v2 - celkova skoda vypocitana z 15 najvacsich nehod lubovolneho druhu
+-- v2 - celkova skoda vypocitana z 1000 najvacsich nehod lubovolneho druhu
 select sum(skoda) suma_kc --v2(aggregate) cost: 763
  from (
     select celk_skoda_kc as skoda,
@@ -238,6 +239,7 @@ select sum(skoda) suma_kc    --v2(aggregate) cost: 766
         where extract(year from cas)=2024
  ) where rn <= 1000 and alko_pritomny='A';
  
+-- FINAL - spojenie
 -- z prvych 1000 najnakladnejsich nehod kolkymi percentami sa na nich podielali nehody s pritomnostou alkoholu. Celkovo vyse 90000 nehod, cize vyberame len z 1.1 % nehod zo vsetkych
 -- cost: 1531
 select 'Podiel skody s pritom. alko vramci TOP 1000:' as popis,
@@ -264,115 +266,46 @@ from (
       from dual);
    
 
---===================================================================================================
-   select * from cr_druh_nehody;
-   select count(*) from cr_nehody where id_druh_nehody=5; -- zrazka s lesnou zverou
-   
--- uloha 2: pre kazdy mesiac urobit jednoriadkovy vypis s informaciou a pocetnostou TOP 3 najcastejsie zrazenych zveri
+--===================================================================================================   
+-- kazdy mesiac: 1-riadk. vypis s informaciou a pocetnostou TOP 3 najcastejsie zrazenych zveri
+-- cost: 762
 select mesiac,
-    listagg('(' || rnk || ')' || nazov || ' [' || pocet || 'x]', ' | ') within group (order by rnk) as TOP_3_pocetnosti
+    listagg('(' || rnk || ')' || nazov || ' [' || pocet || 'x]', ' | ') 
+     within group (order by rnk) as TOP_3_pocetnosti,
+     sum(pocet)||'x' as celkovo
  from (
     select id_mesiac, mesiac, nazov, pocet,
      rank() over (partition by id_mesiac order by pocet desc) as rnk
      from (
-         select extract(month from cas) as id_mesiac, to_char(cas, 'Mon') as mesiac, z.nazov, count(*) as pocet
+         select extract(month from n.cas) as id_mesiac, to_char(n.cas, 'Mon') as mesiac, z.nazov,
+         count(*) as pocet
           from cr_nehody n
            join cr_druh_zviera z on n.id_zviera=z.id_druh
-            where id_druh_nehody=5  -- zrazka s lesnou zverou -- todo tu sa hodi index, ale len na id_druhu, lebo keby som vsetko chcel dat zo selectu, nemozem kvoli agg funkcii
+            where id_druh_nehody=5 and extract(year from cas)=2024 -- id=5 pre zrazku so zverou
              group by z.id_druh, z.nazov, to_char(cas, 'Mon'), extract(month from cas)
      )
- )where rnk <= 3
+ ) where rnk <= 3
   group by id_mesiac, mesiac
    order by id_mesiac;
    
--- todo 3: mesacny klzajuci median poctu zranenych osob(lahko+tazko) -> treba najskor urobit sumy pre kazdy den   
-select trunc(cas) as den, sum(lahko_zraneni+tazko_zraneni) as poc_zraneni
- from cr_nehody 
-  group by trunc(cas); --'02-JAN-24'
-  desc cr_nehody;
   
-select to_timestamp('2024-02-01', 'yyyy-mm-dd') from dual;
-
-select last_day(to_date('2025-02-01', 'yyyy-mm-dd'))-to_date('2025-02-01', 'yyyy-mm-dd') from dual;
-
-select 1 from dual connect by level <5;
-
+--===================================================================================================
+-- 2.5 mesačný kĺzavý medián počtu zranených(ľahko + ťažko zranení) pre rok 2024 (s frekvenciou polmesiac)
+-- cost: 816
 with 
  cislo_mesiac as (
     select 1 as id_mesiac from dual
-    union
-    select 2 from dual
-    union
-    select 3 from dual
-    union
-    select 4 from dual
-    union
-    select 5 from dual
-    union
-    select 6 from dual
-    union
-    select 7 from dual
-    union
-    select 8 from dual
-    union
-    select 9 from dual
-    union
-    select 10 from dual
-    union
-    select 11 from dual
-    union
-    select 12 from dual
- ),
- mesiace as (
-     select id_mesiac, to_date('2024-'||id_mesiac||'-01', 'yyyy-mm-dd') as zac_mes 
-      from cislo_mesiac
- ),
- polmesiace as (
-    select zac_mes as polmesiac from mesiace
-     union
-    select zac_mes + floor((last_day(zac_mes)-zac_mes+1)/2) as stred_mes from mesiace
- )
- select id_nehoda, datum, polmesiac, pocet_zraneni
-  from (
-     select n.id_nehoda, trunc(n.cas)as datum, pm.polmesiac, (n.lahko_zraneni+n.tazko_zraneni) as pocet_zraneni, 
-      row_number() over (partition by id_nehoda order by (case when trunc(cas)-pm.polmesiac>=0 then trunc(cas)-pm.polmesiac else 10000 end)) as pm_priorita
-      from cr_nehody n
-       join polmesiace pm on trunc(n.cas, 'MM')=trunc(pm.polmesiac, 'MM')
-  ) where pm_priorita=1
-   order by datum;
-     
--- cez agregacnu funkciu nevytvorim taku podmienku, ktora by mi vratila prisluchajuci polmesiac
---select id_nehoda, trunc(cas)as datum, lahko_zraneni, tazko_zraneni, max(case when trunc(cas)-pm.polmesiac >= 0 then polmesiac else polmesiac-100 end) as polmesiac
---  from cr_nehody n
---   join polmesiace pm on trunc(n.cas, 'MM')=trunc(pm.polmesiac, 'MM')
---    group by id_nehoda, trunc(cas), lahko_zraneni, tazko_zraneni
---     order by datum;
-
-with 
- cislo_mesiac as (
-    select 1 as id_mesiac from dual
-    union
-    select 2 from dual
-    union
-    select 3 from dual
-    union
-    select 4 from dual
-    union
-    select 5 from dual
-    union
-    select 6 from dual
-    union
-    select 7 from dual
-    union
-    select 8 from dual
-    union
-    select 9 from dual
-    union
-    select 10 from dual
-    union
-    select 11 from dual
-    union
-    select 12 from dual
+    union select 2 from dual
+    union select 3 from dual
+    union select 4 from dual
+    union select 5 from dual
+    union select 6 from dual
+    union select 7 from dual
+    union select 8 from dual
+    union select 9 from dual
+    union select 10 from dual
+    union select 11 from dual
+    union select 12 from dual
  ),
  mesiace as (
      select id_mesiac, to_date('2024-'||id_mesiac||'-01', 'yyyy-mm-dd') as zac_mes 
@@ -389,133 +322,147 @@ with
      select polmesiac, pocet_zraneni
       from (
          select n.id_nehoda, trunc(n.cas)as datum, pm.polmesiac, (n.lahko_zraneni+n.tazko_zraneni) as pocet_zraneni, 
-          row_number() over (partition by id_nehoda order by (case when trunc(cas)-pm.polmesiac>=0 then trunc(cas)-pm.polmesiac else 10000 end)) as pm_priorita
+          row_number() over (partition by id_nehoda order by 
+           (case when trunc(cas)-pm.polmesiac>=0 then trunc(cas)-pm.polmesiac else 10000 end)) as pm_priorita
           from cr_nehody n
            join polmesiace pm on trunc(n.cas, 'MM')=trunc(pm.polmesiac, 'MM')
-      ) where pm_priorita=1 --kazdy zaznam bude mat teraz priradeny prave 1 polmesiac, takze pocet zaznamov je rovny velkosti tabulky
+            where extract(year from cas)=2024
+      ) where pm_priorita=1 --kazdy zaznam bude mat teraz priradeny prave 1 polmesiac, takze pocet zaznamov = count(*)
  )
   group by polmesiac -- vyvoj poctu zranenych s frekvenciou polmesiac
-)
+ )
 select polmesiac, median(pocet_zraneni)
  from (
     select polmesiac, pocet_zraneni from polmes_data
-     union
-    select polmesiac, lag(pocet_zraneni,1) over(order by polmesiac) from polmes_data
-     union
-    select polmesiac, lag(pocet_zraneni,2) over(order by polmesiac) from polmes_data
-     union
-    select polmesiac, lag(pocet_zraneni,3) over(order by polmesiac) from polmes_data
-     union
-    select polmesiac, lag(pocet_zraneni,4) over(order by polmesiac) from polmes_data
+     union all select polmesiac, lag(pocet_zraneni,1) over(order by polmesiac) from polmes_data
+     union all select polmesiac, lag(pocet_zraneni,2) over(order by polmesiac) from polmes_data
+     union all select polmesiac, lag(pocet_zraneni,3) over(order by polmesiac) from polmes_data
+     union all select polmesiac, lag(pocet_zraneni,4) over(order by polmesiac) from polmes_data
 ) group by polmesiac order by polmesiac; 
 
-
-with 
- cislo_mesiac as (
-    select 1 as id_mesiac from dual
-    union
-    select 2 from dual
-    union
-    select 3 from dual
-    union
-    select 4 from dual
-    union
-    select 5 from dual
-    union
-    select 6 from dual
-    union
-    select 7 from dual
-    union
-    select 8 from dual
-    union
-    select 9 from dual
-    union
-    select 10 from dual
-    union
-    select 11 from dual
-    union
-    select 12 from dual
- ),
- mesiace as (
-     select id_mesiac, to_date('2024-'||id_mesiac||'-01', 'yyyy-mm-dd') as zac_mes 
-      from cislo_mesiac
- ),
- polmesiace as (
-    select zac_mes as polmesiac from mesiace
-     union
-    select zac_mes + floor((last_day(zac_mes)-zac_mes+1)/2) as stred_mes from mesiace
- ),
- polmes_data as (
- select polmesiac, sum(pocet_zraneni) as pocet_zraneni
- from (
-     select polmesiac, pocet_zraneni
+--===================================================================================================
+--              O P T I M A L I Z A C I A   D O P Y T O V  -  I N D E X Y
+--===================================================================================================
+-- z prvych 1000 najnakladnejsich nehod kolkymi percentami sa na nich podielali nehody s pritomnostou alkoholu. Celkovo vyse 90000 nehod, cize vyberame len z 1.1 % nehod zo vsetkych
+-- cost: 1531
+select 'Podiel skody s pritom. alko vramci TOP 1000:' as popis,
+ round(100*(sum_kc_alko/sum_kc_celk),3) || '%' as perc, sum_kc_alko, sum_kc_celk
+from ( 
+  select 
+    (select sum(skoda) suma_kc    --v2(aggregate) cost: 766
       from (
-         select n.id_nehoda, trunc(n.cas)as datum, pm.polmesiac, (n.lahko_zraneni+n.tazko_zraneni) as pocet_zraneni, 
-          row_number() over (partition by id_nehoda order by (case when trunc(cas)-pm.polmesiac>=0 then trunc(cas)-pm.polmesiac else 10000 end)) as pm_priorita
+        select a.pritomny as alko_pritomny, celk_skoda_kc as skoda,
+            row_number() over(order by celk_skoda_kc desc) as rn
           from cr_nehody n
-           join polmesiace pm on trunc(n.cas, 'MM')=trunc(pm.polmesiac, 'MM')
-      ) where pm_priorita=1 --kazdy zaznam bude mat teraz priradeny prave 1 polmesiac, takze pocet zaznamov je rovny velkosti tabulky
- )
-  group by polmesiac -- vyvoj poctu zranenych s frekvenciou polmesiac
-)
-select 'Real' as skupina, polmesiac, pocet_zraneni from polmes_data
-    union all
-select 'Median' as skupina, polmesiac, median(pocet_zraneni) as pocet
+           join cr_pritomnost_alko a on n.id_alko_prit = a.id_stav
+            where extract(year from cas)=2024
+--            where to_number(to_char(cas, 'YYYY'))=2024
+           ) where rn <= 1000 and alko_pritomny='A'
+    ) sum_kc_alko, 
+    (select sum(skoda) suma_kc --v2(aggregate) cost: 763
+      from (
+        select celk_skoda_kc as skoda,
+            row_number() over(order by celk_skoda_kc desc) as rn
+          from cr_nehody
+           where extract(year from cas)=2024
+--           where to_number(to_char(cas, 'YYYY'))=2024
+           ) where rn <= 1000
+     ) sum_kc_celk
+      from dual);
+  
+select ui.table_name, ui.index_name, ui.index_type, ui.uniqueness, ui.status, ui.visibility, 
+       uc.constraint_type, uc.owner, uc.constraint_name, uc.status, uc.generated, uc.index_name
+ from user_indexes ui
+  left join user_constraints uc on ui.index_name=uc.constraint_name
+  where ui.table_name='CR_NEHODY'; -- SYS_C00197691
+  
+--CR_NEHODY > iba PK index-> cost: 1531
+
+create index idx1_btree_nehody_year on cr_nehody(cas); -- nepouzije sa
+drop index idx1_btree_nehody_year;
+
+create index idx2_btree_nehody_year on cr_nehody(extract(year from cas)); -- cost: 295
+drop index idx2_btree_nehody_year;
+
+create index idx3_btree_nehody_year on cr_nehody(to_number(to_char(cas, 'YYYY'))); -- cost: 295
+drop index idx3_btree_nehody_year;
+
+select distinct extract(year from cas) rok -- iba 3 zaznamy: 2023, 2024, 2025
+ from cr_nehody;
+ 
+create bitmap index idx_bitmap_nehody_year on cr_nehody(extract(year from cas)); -- cost: 640
+drop index idx_bitmap_nehody_year;
+
+--===================================================================================================   
+-- kazdy mesiac: 1-riadk. vypis s informaciou a pocetnostou TOP 3 najcastejsie zrazenych zveri
+-- cost: 762
+select mesiac,
+    listagg('(' || rnk || ')' || nazov || ' [' || pocet || 'x]', ' | ') 
+     within group (order by rnk) as TOP_3_pocetnosti,
+     sum(pocet)||'x' as celkovo
  from (
-    select polmesiac, pocet_zraneni from polmes_data
-     union
-    select polmesiac, lag(pocet_zraneni,1) over(order by polmesiac) from polmes_data
-     union
-    select polmesiac, lag(pocet_zraneni,2) over(order by polmesiac) from polmes_data
-     union
-    select polmesiac, lag(pocet_zraneni,3) over(order by polmesiac) from polmes_data
-     union
-    select polmesiac, lag(pocet_zraneni,4) over(order by polmesiac) from polmes_data
-) group by polmesiac order by polmesiac;
+    select id_mesiac, mesiac, nazov, pocet,
+     rank() over (partition by id_mesiac order by pocet desc) as rnk
+     from (
+         select extract(month from n.cas) as id_mesiac, to_char(n.cas, 'Mon') as mesiac, z.nazov,
+         count(*) as pocet
+          from cr_nehody n
+           join cr_druh_zviera z on n.id_zviera=z.id_druh
+            where id_druh_nehody=5 and extract(year from cas)=2025 -- id=5 pre zrazku so zverou
+             group by z.id_druh, z.nazov, to_char(cas, 'Mon'), extract(month from cas)
+     )
+ ) where rnk <= 3
+  group by id_mesiac, mesiac
+   order by id_mesiac;
+   
+select count(distinct id_druh_nehody) from cr_nehody; --10 roznych typov
 
---create index ind_nehody_mes on cr_nehody(trunc(cas, 'MM')); -- nic nepomohlo, ale ak by sme pridali data na dalsie roky a selectovali by sme konkretny rok, uz by to mozno na nieco bolo
---drop index ind_nehody_mes;
+create bitmap index idx_bitmap_neh_druh_nehody on cr_nehody(id_druh_nehody);
+create index idx_btree_neh_druh_nehody on cr_nehody(id_druh_nehody);
 
--- uloha 4: kolko nehod byva v konkretny den priemerne za rok. Dat priklad ako use case zobrazenia na stranke.
-select listagg(distinct z.nazov, '; ') within group (order by z.nazov) zrazene_zvery
- from cr_nehody n
-  join cr_druh_zviera z on n.id_zviera=z.id_druh -- bitmap index
-   where trunc(cas)=to_date('2024-05-01','yyyy-mm-dd') and z.nazov not like 'nejde o%'
-   group by trunc(cas);
+create index idx_btree_neh_year on cr_nehody(extract(year from cas)); -- cost: 150
 
-select count(*) from cr_nehody;
+create index idx_btree_nehody_rok_druh on cr_nehody(extract(year from cas), id_druh_nehody); -- cost: 32
 
--- uloha 4: kolko nehod byva v konkretny den priemerne za rok. Dat priklad ako use case zobrazenia na stranke.
-select /*+Index(CR_NEHODY IND_1)*/listagg(distinct z.nazov, '; ') within group (order by z.nazov) zrazene_zvery
- from cr_nehody n
-  join cr_druh_zviera z on n.id_zviera=z.id_druh -- bitmap index
-   where cas<to_date('2024-11-03','yyyy-mm-dd') and z.nazov not like 'nejde o%';
--- cost 380   
-create index ind_1 on cr_nehody(cas);
-drop index ind_1;
-select * from user_indexes where table_name like 'POLJAK';--0
-select
-round((select count(distinct trunc(cas)) from cr_nehody)/
-(select count(*) from cr_nehody),2)*100||'%' as perc
- from dual;
--- todo 5: indexy - skusit bitmap index na fk tabulky cr_nehody, vysvetlit, ze pocet moznych hodnot stlpca je menej ako 1% poctu zaznamov
---              a porovnat s b+ strom index.
--- todo 6: indexy - urobit zlozitejsi select a skusit pre nejaku vnutornu podmienku where pouzit index. Select moze byt iba nad samotnou tabulkou cr_nehody.
+--===================================================================================================
+select * from user_ind_columns where index_name=upper('idx_bitmap_neh_druh_nehody');
 
+select ui.table_name, ui.index_name, ui.index_type, ui.uniqueness, ui.status, ui.visibility, 
+       uc.constraint_type, uc.owner, uc.constraint_name, uc.status, uc.generated, uc.index_name
+ from user_indexes ui
+  left join user_constraints uc on ui.index_name=uc.constraint_name
+  where ui.table_name='CR_VOZIDLA'; -- SYS_C00197691
+  
+-- spajanie tabuliek cez FK
+-- cost: 1793
+select 'Pocet autonehod za rok:' as popis,
+ sum(case extract(year from cas) when 2023 then 1 else 0 end) as count_2023,
+ sum(case extract(year from cas) when 2024 then 1 else 0 end) as count_2024,
+ sum(case extract(year from cas) when 2025 then 1 else 0 end) as count_2025
+from cr_nehody
+    UNION ALL
+select 'Pocet vozidiel za rok:' as popis,
+ sum(case extract(year from cas) when 2023 then 1 else 0 end) as count_2023,
+ sum(case extract(year from cas) when 2024 then 1 else 0 end) as count_2024,
+ sum(case extract(year from cas) when 2025 then 1 else 0 end) as count_2025
+from cr_vozidla
+ join cr_nehody using(id_nehoda);
 
-select trunc(cas) c
- from cr_nehody n
- join cr_vozidla v on n.id_nehoda=v.id_nehoda
-  where id_zviera=5
-   group by trunc(cas)
-    order by 1; --884
-    
-create index ind_tst on cr_vozidla(id_nehoda);
-drop index ind_tst;
---commit;
-desc cr_vozidla;
-desc user_constraints;
-select * from user_tables where table_name like 'CR_%'
- order by table_name;
-select * from user_constraints where owner='POLJAK' and table_name='CR_VOZIDLA';
-alter table cr_vozidla drop constraint "CR_VOZIDLA_PK";
+create index ind_btree_voz_id_nehoda_fk on cr_vozidla(id_nehoda);
+
+-- spajanie tabuliek cez FK
+-- cost: 1541
+select 'Pocet autonehod za rok:' as popis,
+ sum(case extract(year from cas) when 2023 then 1 else 0 end) as count_2023,
+ sum(case extract(year from cas) when 2024 then 1 else 0 end) as count_2024,
+ sum(case extract(year from cas) when 2025 then 1 else 0 end) as count_2025
+from cr_nehody
+    UNION ALL
+select /*+Use_Merge(CR_VOZIDLA IND_BTREE_VOZ_ID_NEHODA_FK)*/'Pocet vozidiel za rok:' as popis, -- hint nezohladnuje
+ sum(case extract(year from cas) when 2023 then 1 else 0 end) as count_2023,
+ sum(case extract(year from cas) when 2024 then 1 else 0 end) as count_2024,
+ sum(case extract(year from cas) when 2025 then 1 else 0 end) as count_2025
+from cr_vozidla
+ join cr_nehody using(id_nehoda);
+ 
+-- the end:)
