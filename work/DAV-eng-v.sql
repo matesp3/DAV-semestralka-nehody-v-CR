@@ -86,52 +86,52 @@ select mon_name, ' Amounts: ' as desc1, alco_yes, alco_no, refused, not_found_ou
     group by TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English')
      order by accidents desc;
     
---v1: cost: 763 | nested selects to get local maximum
+--v1: cost: 771  | nested selects to get local maximum
 select 'Top 3. most accidents (2024): ' as description,
  TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English') as month_id, count(*) as accidents
-  from cr_nehody acc
-   where extract(year from acc.cas)=2024
+  from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco ON acc.ID_ALKO_PRIT = alco.ID_STAV
+   where extract(year from acc.cas)=2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
     group by TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English')
      having count(*) = (select max(count(*))
-                        from cr_nehody accLvl1
-                         where extract(year from accLvl1.cas)=2024
+                        from cr_nehody accLvl1 JOIN CR_PRITOMNOST_ALKO alco1 ON accLvl1.ID_ALKO_PRIT = alco1.ID_STAV
+                         where extract(year from accLvl1.cas)=2024 AND alco1.PRITOMNY IS NOT NULL AND alco1.PRITOMNY LIKE 'A'
                           group by extract(month from accLvl1.cas)
                            having count(*) < (select max(count(*))
-                                              from cr_nehody accLvl2
-                                               where extract(year from accLvl2.cas)=2024
+                                              from cr_nehody accLvl2 JOIN CR_PRITOMNOST_ALKO alco2 ON accLvl2.ID_ALKO_PRIT = alco2.ID_STAV
+                                               where extract(year from accLvl2.cas)=2024 AND alco2.PRITOMNY IS NOT NULL AND alco2.PRITOMNY LIKE 'A'
                                                 group by extract(month from accLvl2.cas)
                                                  having count(*) < (select max(count(*))
-                                                                    from cr_nehody accLvl3
-                                                                     where extract(year from accLvl3.cas)=2024
+                                                                    from cr_nehody accLvl3 JOIN CR_PRITOMNOST_ALKO alco3 ON accLvl3.ID_ALKO_PRIT = alco3.ID_STAV
+                                                                     where extract(year from accLvl3.cas)=2024 AND alco3.PRITOMNY IS NOT NULL AND alco3.PRITOMNY LIKE 'A'
                                                                       group by extract(month from accLvl3.cas)
                                                                     )
                                               )
                        );
                        
- --v2: cost: 766 | ordering results of 'fetch'
+ --v2: cost: 3322 | ordering results of 'fetch'
  select 'Top 3. most accidents (2024): ' as description, TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English') as month_id,
   count(*) as accidents
-  from cr_nehody acc
-   where extract(year from acc.cas)=2024
+  from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco ON acc.ID_ALKO_PRIT = alco.ID_STAV
+   where extract(year from acc.cas)=2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
     group by TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English')
      order by accidents desc 
       offset 2 rows fetch first row with ties;
      
- --v3: cost: 764 | analytic funcion 'dense_rank'
+ --v3: cost: 1569 | analytic funcion 'dense_rank'
  select 'Top 3. most accidents (2024): ' as description, month_id, accidents
  from (
      select month_id, accidents,
             dense_rank() over (order by accidents desc) rnk
      from (
          select TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English') as month_id, count(*) as accidents
-          from cr_nehody acc
-           where extract(year from acc.cas)=2024
+          from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco ON acc.ID_ALKO_PRIT = alco.ID_STAV
+           where extract(year from acc.cas)=2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
             group by TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English')
        )
 ) where rnk = 3;
 
      
- --v4: cost: 2383 | vyuzitie analytickej funkcie dense_rank a analytickej funkcie count namiesto agregacnej count
+ --v4: cost: 2444 | vyuzitie analytickej funkcie dense_rank a analytickej funkcie count namiesto agregacnej count
 SELECT 'Top 3. most accidents (2024): ' as description, month_id, accidents
  FROM
 (
@@ -141,8 +141,8 @@ SELECT 'Top 3. most accidents (2024): ' as description, month_id, accidents
 	            dense_rank() over (order by accidents desc) rnk
 	     from (
 	         select TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English') as month_id, count(*) over (partition by extract(month from acc.cas) order by null) as accidents
-	          from cr_nehody acc
-	           WHERE EXTRACT(YEAR FROM acc.cas) = 2024
+	          from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco ON acc.ID_ALKO_PRIT = alco.ID_STAV
+	           WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
 	       )
 ) where rnk = 3
 );
