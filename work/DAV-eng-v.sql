@@ -74,10 +74,8 @@ select mon_name, ' Amounts: ' as desc1, alco_yes, alco_no, refused, not_found_ou
         group by extract(month from cas), TO_CHAR(cas, 'Month','NLS_DATE_LANGUAGE=English')
  )
   order by month_id;
-
  
  -- 3. month with greatest amount of accidents due to alcohol usage
- 
  --v1: listing of all months with corresponding accident counts
  select TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English') as month_id, count(*) as accidents
   from cr_nehody acc
@@ -144,5 +142,132 @@ SELECT 'Top 3. most accidents (2024): ' as description, month_id, accidents
 	          from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco ON acc.ID_ALKO_PRIT = alco.ID_STAV
 	           WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
 	       )
-) where rnk = 3
+	) where rnk = 3
 );
+
+--===================================================================================================
+-- task 1: what's the percentage ratio of the most devastating accidents damage with alcohol usage among TOP 1000 most devastating accidents of any kind
+select damage_alco, damage_overall, round(100 * damage_alco/damage_overall, 2) || '%' as perc_ratio from (
+ select
+ (select 1 from dual) as damage_alco,
+ (select 2 from dual) as damage_overall
+  from dual
+);
+
+-- v1 - overall damage computed from 1000 biggest accidents of any kind
+select damage_overall          --v1(analytic) cost: 1256
+ from (
+     select acc.celk_skoda_kc as damage,
+        row_number() over(order by acc.celk_skoda_kc desc, acc.id_nehoda) as rn, -- must be id_nehoda, because OF possible different results FOR rolling sum
+        sum(acc.celk_skoda_kc) over (order by acc.celk_skoda_kc desc, acc.id_nehoda) as damage_overall 
+      from cr_nehody acc
+       where extract(year from acc.cas)=2024
+ ) where rn = 1000;
+  
+-- v2 - overall damage computed from 1000 biggest accidents of any kind
+select sum(damage) damage_overall --v2(aggregate) cost: 1256
+ from (
+    select acc.celk_skoda_kc as damage,
+        row_number() over(order by acc.celk_skoda_kc desc, acc.id_nehoda) as rn
+      from cr_nehody acc
+       where extract(year from acc.cas)=2024
+ ) where rn <= 1000;   
+
+
+-- v1 overall damage computed from 1000 biggest accidents caused by an alcohol usage
+select sum(damage) over() as damage_alco --v1(analytic) cost: 1260;
+ from (
+    select alco.pritomny as alco_present, celk_skoda_kc as damage,
+        row_number() over(order by celk_skoda_kc desc) as rn
+      from cr_nehody acc
+       join cr_pritomnost_alko alco on acc.id_alko_prit = alco.id_stav
+        where extract(year from acc.cas)=2024
+ ) where rn <= 1000 and alco_present ='A'
+   fetch first row only;
+
+-- v2 overall damage computed from 1000 biggest accidents caused by an alcohol usage
+select sum(damage) damage_alco    --v2(aggregate) cost: 1260
+ from (
+    select alco.pritomny as alco_present, celk_skoda_kc as damage,
+        row_number() over(order by acc.celk_skoda_kc desc) as rn
+      from cr_nehody acc
+       join cr_pritomnost_alko alco on acc.id_alko_prit = alco.id_stav
+        where extract(year from acc.cas)=2024
+ ) where rn <= 1000 and alco_present='A';
+ 
+-- FINAL - combination
+-- from first 1000 most costly accidents, how much alcohol accidents participate in overall damage
+-- Overally, we have over 90000 accidents, so we are working just with 1.1 % of all in 2024
+-- cost: 1531
+select 'Share of alcohol damage among TOP 1000 most costly damages:' as description,
+ round(100*(damage_alco/damage_overall),3) || '%' as perc, damage_alco, damage_overall from ( 
+  select 
+    (select sum(damage) damage_alc    --v2(aggregate) cost: 766
+      from (
+        select alco.pritomny as alco_present, acc.celk_skoda_kc as damage,
+            row_number() over(order by acc.celk_skoda_kc desc) as rn
+          from cr_nehody acc
+           join cr_pritomnost_alko alco on acc.id_alko_prit = alco.id_stav
+            where extract(year from acc.cas)=2024
+           ) where rn <= 1000 and alco_present='A'
+    ) AS damage_alco, 
+    (select sum(damage) damage_ovrl --v2(aggregate) cost: 763
+      from (
+        select celk_skoda_kc as damage,
+            row_number() over(order by acc.celk_skoda_kc desc) as rn
+          from cr_nehody acc
+           where extract(year from acc.cas)=2024
+           ) where rn <= 1000
+     ) AS damage_overall
+   from dual);
+   
+--===================================================================================================
+-- 2.5-month moving median of amount of injured (slightly + seriously) for 2024 (frequency = half-month)
+-- cost: 816
+with 
+ month_nr as (
+    select 1 as month_id from dual
+    union select 2 from dual
+    union select 3 from dual
+    union select 4 from dual
+    union select 5 from dual
+    union select 6 from dual
+    union select 7 from dual
+    union select 8 from dual
+    union select 9 from dual
+    union select 10 from dual
+    union select 11 from dual
+    union select 12 from dual
+ ),
+ months as (
+     select month_id, to_date('2024-'||month_id||'-01', 'yyyy-mm-dd') as month_bt 
+      from month_nr
+ ),
+ halfmonths as (
+    select month_bt as halfmon from months
+     union
+    select month_bt + floor((last_day(month_bt)-month_bt+1)/2) as month_half from months
+ ),
+ halfmon_data as (
+ select halfmon, sum(count_injured) as count_injured
+ from (
+     select halfmon, count_injured
+      from (
+         select acc.id_nehoda, trunc(acc.cas)as date_trunc, hms.halfmon, (acc.lahko_zraneni+acc.tazko_zraneni) as count_injured, 
+          row_number() over (partition by id_nehoda order by 
+           (case when trunc(acc.cas)-hms.halfmon>=0 then trunc(acc.cas)-hms.halfmon else 10000 end)) as hms_priority
+          from cr_nehody acc
+           join halfmonths hms on trunc(acc.cas, 'MM')=trunc(hms.halfmon, 'MM')
+            where extract(year from acc.cas)=2024
+      ) where hms_priority=1 --kazdy zaznam bude mat teraz priradeny prave 1 halfmon, takze pocet zaznamov = count(*)
+ )
+  group by halfmon -- vyvoj poctu zranenych s frekvenciou halfmon
+ )
+select halfmon, median(count_injured) median_injured
+ from (
+    select halfmon, count_injured from halfmon_data
+     union all select halfmon, lag(count_injured,1) over(order by halfmon) from halfmon_data
+     union all select halfmon, lag(count_injured,2) over(order by halfmon) from halfmon_data
+     union all select halfmon, lag(count_injured,3) over(order by halfmon) from halfmon_data
+     union all select halfmon, lag(count_injured,4) over(order by halfmon) from halfmon_data
+) group by halfmon order by halfmon; 
