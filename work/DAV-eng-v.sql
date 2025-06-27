@@ -259,9 +259,9 @@ with
           from cr_nehody acc
            join halfmonths hms on trunc(acc.cas, 'MM')=trunc(hms.halfmon, 'MM')
             where extract(year from acc.cas)=2024
-      ) where hms_priority=1 --kazdy zaznam bude mat teraz priradeny prave 1 halfmon, takze pocet zaznamov = count(*)
+      ) where hms_priority=1 -- each record is going to have assigned 1 halfmon, so the number of halfmonths = count(*)
  )
-  group by halfmon -- vyvoj poctu zranenych s frekvenciou halfmon
+  group by halfmon -- development of injuries number with frequency equal to halfmon
  )
 select halfmon, median(count_injured) median_injured
  from (
