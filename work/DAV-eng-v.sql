@@ -122,7 +122,7 @@ select 'Top 3. most accidents (2024): ' as description,
             dense_rank() over (order by accidents desc) rnk
      from (
          select TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English') as month_id, count(*) as accidents
-          from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco ON acc.ID_ALKO_PRIT = alco.ID_STAV
+          from cr_nehody acc JOIN CR_PRITOMNOST_ALKO
            where extract(year from acc.cas)=2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
             group by TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English')
        )
@@ -271,3 +271,76 @@ select halfmon, median(count_injured) median_injured
      union all select halfmon, lag(count_injured,3) over(order by halfmon) from halfmon_data
      union all select halfmon, lag(count_injured,4) over(order by halfmon) from halfmon_data
 ) group by halfmon order by halfmon; 
+
+
+-----
+SELECT 
+ (select
+ count(DISTINCT ID_NEHODA) as amount
+ from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco
+  WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.pritomny LIKE 'A') AS count_alco,
+  (SELECT count(*)
+  FROM cr_nehody
+   WHERE EXTRACT(YEAR FROM acc.cas) = 2024) AS count all
+
+
+
+
+
+-- which 3 regions appeared most times in top 3 greatest numbers of alco-accidents in 2024 with monthly interval
+SELECT id_region, region_name, being_in_top_3, RANK() OVER (ORDER BY being_in_top_3) AS ranking
+ FROM
+(
+	SELECT id_region, region_name, count(*) AS being_in_top_3
+	 FROM
+	 (
+		SELECT id_region, region_name, rank() OVER (PARTITION BY month_region ORDER BY alco_accidents) AS rnk, alco_accidents
+		 FROM
+		 (
+			SELECT count(*) AS alco_accidents,
+			 kraj.id_region AS id_region, kraj.nazov AS region_name, extract(MONTH FROM cas) month_region 
+			 from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco
+			  WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.pritomny LIKE 'A'
+			   GROUP BY kraj.id_kraj, kraj.nazov, extract(MONTH FROM cas)
+		)
+	) WHERE rnk <= 3
+	 GROUP BY id_region, region_name
+)
+
+
+SELECT EXTRACT(DAY FROM LAST_DAY(TO_DATE('2025-' || 2 || '-01', 'YYYY-MM-DD'))) AS days_in_month
+FROM dual;
+
+SELECT trunc(to_date('2025-01-01', 'yyyy-mm-dd') - to_date('2024-01-01', 'yyyy-mm-dd')) AS days_between --366 FOR 2024 - leap year
+ FROM dual;
+
+-- ranking of regions regarding their wavg ratio of alco accidents in relation with all accidents for given month
+SELECT id_region, region_name, month_region AS mon, avg((alco_amount/overall_amount)*100) AS avg_ratio,
+(EXTRACT(DAY FROM LAST_DAY(TO_DATE('2024-' || month_region || '-01', 'YYYY-MM-DD'))) * (alco_amount/overall_amount)) / 365 AS wavg_ratio
+FROM
+(
+	SELECT 
+	 id_region,
+	 region_name,
+	 month_region,
+	 max(CASE WHEN amount_type_id = 1 THEN accidents ELSE NULL) AS alco_amount,
+	 max(CASE WHEN amount_type_id = 2 THEN accidents ELSE NULL) AS overall_amount
+	 FROM
+	(
+		(SELECT 1 AS amount_type_id, count(*) AS accidents, -- alco amounts
+		 kraj.id_region AS id_region, kraj.nazov AS region_name, extract(MONTH FROM cas) month_region 
+		 from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco
+		  WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.pritomny LIKE 'A'
+		   GROUP BY kraj.id_kraj, kraj.nazov, extract(MONTH FROM cas))
+		UNION ALL
+		(SELECT 2 AS amount_type_id, count(*) AS accidents, -- overall amounts
+		 kraj.id_region AS id_region, kraj.nazov AS region_name, extract(MONTH FROM cas) month_region 
+		 from cr_nehody acc
+		  WHERE EXTRACT(YEAR FROM acc.cas) = 2024
+		   GROUP BY kraj.id_kraj, kraj.nazov, extract(MONTH FROM cas))
+	) GROUP BY id_region, region_name, month_region
+) ORDER BY wavg_ratio;	
+	
+
+
+
