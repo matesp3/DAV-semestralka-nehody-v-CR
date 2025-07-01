@@ -7,33 +7,29 @@ END;
 SELECT * FROM cr_nehody;
 
 -- 
-
-select 'Accidents (2024):' as description,
- count(*) as amount
- from cr_nehody
-  WHERE EXTRACT(YEAR FROM cas) = 2024
- UNION ALL
-select 'Car-accidents (2024):' as description,
- count(DISTINCT ID_NEHODA) as amount
- from cr_nehody join cr_vozidla using(id_nehoda)
-  WHERE EXTRACT(YEAR FROM cas) = 2024
- UNION ALL
-select 'Accidents with alcohol (2024):' as description,
- count(*) as amount
- from cr_nehody acc1 JOIN CR_PRITOMNOST_ALKO alco1 ON acc1.ID_ALKO_PRIT = alco1.ID_STAV
-  WHERE EXTRACT(YEAR FROM cas) = 2024 AND alco1.PRITOMNY IS NOT NULL AND alco1.PRITOMNY LIKE 'A'
- UNION ALL
-select 'Car-accidents with alcohol (2024):' as description,
- count(DISTINCT ID_NEHODA) as amount
- from cr_nehody acc2 
-  join cr_vozidla car2 using(id_nehoda)
-  JOIN CR_PRITOMNOST_ALKO alco2 ON acc2.ID_ALKO_PRIT = ALCO2.ID_STAV
-  WHERE EXTRACT(YEAR FROM cas) = 2024 AND ALCO2.PRITOMNY IS NOT NULL AND ALCO2.PRITOMNY LIKE 'A';
- UNION ALL
-select 'Accidents with alcohol (2024):' as description,
- count(*) as amount
- from cr_nehody acc3 JOIN CR_PRITOMNOST_ALKO alco1 ON acc3.ID_ALKO_PRIT = alco1.ID_STAV
-  WHERE EXTRACT(YEAR FROM cas) = 2024 AND alco1.PRITOMNY IS NOT NULL AND alco1.PRITOMNY LIKE 'A'
+SELECT	'Alco-ratio (accidents): ' || round(100*alco_acc_cnt/accidents_count, 2) || '%' 
+		||' ['||alco_acc_cnt||' / '|| accidents_count||']'AS ratio_accidents_count,
+		'Alco-ratio (vehicles): '  || round(100*alco_veh_cnt/vehicles_count, 2) || '%' 
+		||' ['||alco_veh_cnt||' / '|| vehicles_count||']' AS ratio_vehicles_count
+ FROM (
+	SELECT	lag(accidents_count) OVER (ORDER BY id) AS alco_acc_cnt,
+			accidents_count,
+			lag(vehicles_count) OVER (ORDER BY id) AS alco_veh_cnt,
+			vehicles_count
+	 FROM (
+		select 1 AS id, -- Accidents with alcohol (2024)
+		 count(*) as accidents_count,
+		 sum(acc2.poc_vozidiel) AS vehicles_count
+		 from cr_nehody acc2 JOIN cr_pritomnost_alko alco ON acc2.id_alko_prit = alco.id_stav
+		  WHERE EXTRACT(YEAR FROM acc2.cas) = 2024 AND 
+		   alco.pritomny IS NOT NULL AND alco.pritomny LIKE 'A'
+		UNION ALL
+		select 2 AS id, -- All accidents (2024)
+		 count(*) as accidents_count,
+		 sum(acc1.poc_vozidiel) AS vehicles_count
+		 from cr_nehody acc1
+		  WHERE EXTRACT(YEAR FROM acc1.cas) = 2024)
+) WHERE alco_acc_cnt IS NOT null;
 
  SELECT * FROM CR_PRITOMNOST_ALKO
   WHERE pritomny IS NULL OR pritomny NOT LIKE 'A'
@@ -273,40 +269,27 @@ select halfmon, median(count_injured) median_injured
 ) group by halfmon order by halfmon; 
 
 
------
-SELECT 
- (select
- count(DISTINCT ID_NEHODA) as amount
- from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco
-  WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.pritomny LIKE 'A') AS count_alco,
-  (SELECT count(*)
-  FROM cr_nehody
-   WHERE EXTRACT(YEAR FROM acc.cas) = 2024) AS count all
-
-
-
-
-
 -- which 3 regions appeared most times in top 3 greatest numbers of alco-accidents in 2024 with monthly interval
-SELECT id_region, region_name, being_in_top_3, RANK() OVER (ORDER BY being_in_top_3) AS ranking
+SELECT id_region, region_name, being_in_top_3, RANK() OVER (ORDER BY being_in_top_3 desc) AS ranking
  FROM
 (
 	SELECT id_region, region_name, count(*) AS being_in_top_3
 	 FROM
 	 (
-		SELECT id_region, region_name, rank() OVER (PARTITION BY month_region ORDER BY alco_accidents) AS rnk, alco_accidents
+		SELECT id_region, region_name, rank() OVER (PARTITION BY month_id ORDER BY alco_accidents) AS rnk, alco_accidents
 		 FROM
 		 (
 			SELECT count(*) AS alco_accidents,
-			 kraj.id_region AS id_region, kraj.nazov AS region_name, extract(MONTH FROM cas) month_region 
-			 from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco
+			 regions.id_kraj AS id_region, regions.nazov AS region_name, extract(MONTH FROM acc.cas) AS month_id
+			 from cr_nehody acc
+			 JOIN CR_KRAJE regions ON acc.id_kraj = regions.id_kraj
+			 JOIN CR_PRITOMNOST_ALKO alco ON acc.id_alko_prit = alco.id_stav
 			  WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.pritomny LIKE 'A'
-			   GROUP BY kraj.id_kraj, kraj.nazov, extract(MONTH FROM cas)
+			   GROUP BY regions.id_kraj, regions.nazov, extract(MONTH FROM acc.cas)
 		)
 	) WHERE rnk <= 3
 	 GROUP BY id_region, region_name
-)
-
+);
 
 SELECT EXTRACT(DAY FROM LAST_DAY(TO_DATE('2025-' || 2 || '-01', 'YYYY-MM-DD'))) AS days_in_month
 FROM dual;
@@ -315,32 +298,49 @@ SELECT trunc(to_date('2025-01-01', 'yyyy-mm-dd') - to_date('2024-01-01', 'yyyy-m
  FROM dual;
 
 -- ranking of regions regarding their wavg ratio of alco accidents in relation with all accidents for given month
-SELECT id_region, region_name, month_region AS mon, avg((alco_amount/overall_amount)*100) AS avg_ratio,
-(EXTRACT(DAY FROM LAST_DAY(TO_DATE('2024-' || month_region || '-01', 'YYYY-MM-DD'))) * (alco_amount/overall_amount)) / 365 AS wavg_ratio
-FROM
+SELECT DENSE_RANK() OVER (ORDER BY wavg_ratio desc) AS ranking,
+      region_name, round(wavg_ratio, 3) || '%' wavg_ratio, round(avg_ratio, 3) || '%' avg_ratio
+ FROM 
 (
-	SELECT 
-	 id_region,
-	 region_name,
-	 month_region,
-	 max(CASE WHEN amount_type_id = 1 THEN accidents ELSE NULL) AS alco_amount,
-	 max(CASE WHEN amount_type_id = 2 THEN accidents ELSE NULL) AS overall_amount
-	 FROM
+	SELECT id_region, region_name,
+		avg((alco_amount/overall_amount)*100) AS avg_ratio,
+		sum(days_in_month * (alco_amount/overall_amount)*100/365) AS wavg_ratio
+	FROM
 	(
-		(SELECT 1 AS amount_type_id, count(*) AS accidents, -- alco amounts
-		 kraj.id_region AS id_region, kraj.nazov AS region_name, extract(MONTH FROM cas) month_region 
-		 from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco
-		  WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.pritomny LIKE 'A'
-		   GROUP BY kraj.id_kraj, kraj.nazov, extract(MONTH FROM cas))
-		UNION ALL
-		(SELECT 2 AS amount_type_id, count(*) AS accidents, -- overall amounts
-		 kraj.id_region AS id_region, kraj.nazov AS region_name, extract(MONTH FROM cas) month_region 
-		 from cr_nehody acc
-		  WHERE EXTRACT(YEAR FROM acc.cas) = 2024
-		   GROUP BY kraj.id_kraj, kraj.nazov, extract(MONTH FROM cas))
-	) GROUP BY id_region, region_name, month_region
-) ORDER BY wavg_ratio;	
+		SELECT 
+		 id_region,
+		 region_name,
+		 month_id,
+		 max(CASE WHEN amount_type_id = 1 THEN accidents ELSE NULL END) AS alco_amount,
+		 max(CASE WHEN amount_type_id = 2 THEN accidents ELSE NULL END) AS overall_amount,
+		 extract(DAY FROM last_day(to_date('2024-' || month_id || '-01', 'YYYY-MM-DD'))) AS days_in_month
+		 FROM
+		(
+			(SELECT 1 AS amount_type_id, count(*) AS accidents, -- alco amounts
+			 regions.id_kraj AS id_region, regions.nazov AS region_name, extract(MONTH FROM acc.cas) month_id 
+			 from cr_nehody acc
+			 JOIN CR_KRAJE regions ON acc.id_kraj = regions.id_kraj
+			 JOIN CR_PRITOMNOST_ALKO alco ON acc.id_alko_prit = alco.id_stav
+			  WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.pritomny LIKE 'A'
+			   GROUP BY regions.id_kraj, regions.nazov, extract(MONTH FROM cas))
+			UNION ALL
+			(SELECT 2 AS amount_type_id, count(*) AS accidents, -- overall amounts
+			 regions.id_kraj AS id_region, regions.nazov AS region_name, extract(MONTH FROM acc.cas) month_id 
+			 from cr_nehody acc
+			 JOIN CR_KRAJE regions ON acc.id_kraj = regions.id_kraj
+			  WHERE EXTRACT(YEAR FROM acc.cas) = 2024
+			   GROUP BY regions.id_kraj, regions.nazov, extract(MONTH FROM acc.cas))
+		) GROUP BY id_region, region_name, month_id
+	) GROUP BY id_region, region_name
+	  ORDER BY wavg_ratio
+);
 	
 
 
 
+
+SELECT * FROM cr_NEHODY acc
+ WHERE POC_VOZIDIEL  = 0;
+--  JOIN cr_vozidla vec ON acc.id_nehoda = vec.ID_NEHODA 
+--   GROUP BY acc.id_nehoda, acc.poc_vozidiel
+--    HAVING count(*) = 0;
