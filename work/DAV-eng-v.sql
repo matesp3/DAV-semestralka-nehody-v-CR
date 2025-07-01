@@ -157,7 +157,7 @@ SELECT month_id, accidents
 	           WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
 	       )
 	) where rnk <= 3
-);
+) ORDER BY accidents desc;
 
 --===================================================================================================
 -- task 1: what's the percentage ratio of the most devastating accidents damage with alcohol usage among TOP 1000 most devastating accidents of any kind
@@ -353,12 +353,53 @@ SELECT DENSE_RANK() OVER (ORDER BY wavg_ratio desc) AS ranking,
 	  ORDER BY wavg_ratio
 );
 	
+SELECT pritomny, count(*) AS
+ FROM cr_nehody acc
+ JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav
+  WHERE pritomny LIKE 'X' OR pritomny LIKE 'O'
+   GROUP BY pritomny;
 
+SELECT * FROM
+(
+	SELECT pritomny, region_name, cnt, dense_rank() OVER (PARTITION BY pritomny ORDER BY cnt desc) AS rnk
+	 FROM 
+	(
+		SELECT pritomny, regions.id_kraj AS region_id, regions.nazov AS region_name, count(*) AS cnt
+		 FROM cr_nehody acc
+		 JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav
+		 JOIN cr_kraje regions ON acc.id_kraj = regions.id_kraj
+		  WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND pritomny LIKE 'X' OR pritomny LIKE 'O'
+		   GROUP BY pritomny, regions.id_kraj, regions.nazov
+	 )
+) WHERE rnk <= 3
+ ORDER BY pritomny;
 
-
-
-SELECT * FROM cr_NEHODY acc
- WHERE POC_VOZIDIEL  = 0;
---  JOIN cr_vozidla vec ON acc.id_nehoda = vec.ID_NEHODA 
---   GROUP BY acc.id_nehoda, acc.poc_vozidiel
---    HAVING count(*) = 0;
+-- in which hours has occured most accidents related to alcohol
+-- TODO: histogram
+SELECT	count(*) AS cnt,
+		EXTRACT(HOUR FROM acc.cas) AS hr
+ FROM cr_nehody acc
+ JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav
+  WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND alco.pritomny LIKE 'A'
+  GROUP BY EXTRACT(HOUR FROM acc.cas)
+   ORDER BY cnt desc;
+-- okej, zistili sme, ze vo vecernych hodinach, ale deje sa to aj cez tyzden alebo skor cez vikend
+  
+SELECT	to_char(acc.cas, 'D'),
+		to_char(acc.cas, 'Day')
+ FROM cr_nehody acc
+ 
+ 
+SELECT	count(*) AS cnt,
+		to_char(acc.cas, 'Day') AS dd
+ FROM cr_nehody acc
+ JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav
+--  WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND EXTRACT(HOUR FROM acc.cas) IN (18,19,20) AND alco.pritomny LIKE 'A'
+  WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND alco.pritomny LIKE 'A'
+  GROUP BY to_char(acc.cas, 'Day')
+   ORDER BY cnt desc;
+   
+SELECT acc.poc_vozidiel AS vehicles_per_acc, dense_rank() OVER (ORDER BY acc.poc_vozidiel desc)
+ FROM cr_nehody acc
+ JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav
+  WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND alco.pritomny LIKE 'A';
