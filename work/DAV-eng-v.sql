@@ -4,9 +4,27 @@ BEGIN
     dbms_output.put_line('Done.');
 END;
 
-SELECT * FROM cr_nehody;
 
--- 
+SELECT * -- table with all accidents
+ FROM cr_nehody
+ WHERE EXTRACT(YEAR FROM cas) = 2024;
+
+SELECT * -- finding out whether alcohol was present during accident or not
+ FROM cr_nehody acc
+ JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav;
+
+SELECT	id_stav AS state_id, -- presence OF alcohol - states
+		pritomny AS present,
+		CASE pritomny
+        WHEN 'A' THEN 'Yes'
+        WHEN 'N' THEN 'No'
+        WHEN 'O' THEN 'Refused'
+        WHEN 'X' THEN 'Not observed'
+    END AS was_present,
+    OBSAH_PERC AS amount_perc
+  FROM CR_PRITOMNOST_ALKO
+   ORDER BY was_present desc NULLS LAST, state_id;
+
 SELECT	'Alco-ratio (accidents): ' || round(100*alco_acc_cnt/accidents_count, 2) || '%' 
 		||' ['||alco_acc_cnt||' / '|| accidents_count||']'AS ratio_accidents_count,
 		'Alco-ratio (vehicles): '  || round(100*alco_veh_cnt/vehicles_count, 2) || '%' 
@@ -29,25 +47,24 @@ SELECT	'Alco-ratio (accidents): ' || round(100*alco_acc_cnt/accidents_count, 2) 
 		 sum(acc1.poc_vozidiel) AS vehicles_count
 		 from cr_nehody acc1
 		  WHERE EXTRACT(YEAR FROM acc1.cas) = 2024)
-) WHERE alco_acc_cnt IS NOT null;
-
- SELECT * FROM CR_PRITOMNOST_ALKO
-  WHERE pritomny IS NULL OR pritomny NOT LIKE 'A'
-  
-  
---  statistika pre obsah alkoholu pocas nehody
+) WHERE alco_acc_cnt IS NOT null;  
+ 
+--  statistics of alcohol level in blood during an accident
 select case when alco.pritomny='A' then 'Yes'
             when alco.pritomny='N' then 'No'
             when alco.pritomny='O' then 'Refused'
             when alco.pritomny='X' then 'Not observed'
             else 'Other' end as alco_present,
     alco.obsah_perc as alco_value_in_blood,
-    count(*) as accidents_count
+    count(*) as accidents_count,
+    round(count(*)/
+    (SELECT count(*) AS overall_cnt FROM cr_nehody WHERE EXTRACT(YEAR FROM cas)=2024)
+    ,4)*100 || '%' AS ratio
  from cr_nehody n
  join cr_pritomnost_alko alco on n.id_alko_prit = alco.id_stav
   where extract(year from cas)=2024
    group by alco.id_stav, alco.pritomny, alco.obsah_perc
-    order by accidents_count desc;
+    order by accidents_count DESC;
   
 -- monthly ratio of accidents with confirmed alcohol usage among all accidents
 select mon_name, ' Amounts: ' as desc1, alco_yes, alco_no, refused, not_found_out,
@@ -81,12 +98,13 @@ select mon_name, ' Amounts: ' as desc1, alco_yes, alco_no, refused, not_found_ou
      order by accidents desc;
     
 --v1: cost: 771  | nested selects to get local maximum
-select 'Top 3. most accidents (2024): ' as description,
+-- top 3 months with greatest amount of accidents related to alcohol usage
+select
  TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English') as month_id, count(*) as accidents
   from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco ON acc.ID_ALKO_PRIT = alco.ID_STAV
    where extract(year from acc.cas)=2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
     group by TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English')
-     having count(*) = (select max(count(*))
+     having count(*) >= (select max(count(*))
                         from cr_nehody accLvl1 JOIN CR_PRITOMNOST_ALKO alco1 ON accLvl1.ID_ALKO_PRIT = alco1.ID_STAV
                          where extract(year from accLvl1.cas)=2024 AND alco1.PRITOMNY IS NOT NULL AND alco1.PRITOMNY LIKE 'A'
                           group by extract(month from accLvl1.cas)
@@ -100,33 +118,33 @@ select 'Top 3. most accidents (2024): ' as description,
                                                                       group by extract(month from accLvl3.cas)
                                                                     )
                                               )
-                       );
+                       ) ORDER BY accidents desc;
                        
  --v2: cost: 3322 | ordering results of 'fetch'
- select 'Top 3. most accidents (2024): ' as description, TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English') as month_id,
+ select TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English') as month_id,
   count(*) as accidents
   from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco ON acc.ID_ALKO_PRIT = alco.ID_STAV
    where extract(year from acc.cas)=2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
     group by TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English')
-     order by accidents desc 
-      offset 2 rows fetch first row with ties;
+     order by accidents desc
+      fetch first 3 rows with ties;
      
  --v3: cost: 1569 | analytic funcion 'dense_rank'
- select 'Top 3. most accidents (2024): ' as description, month_id, accidents
+ select month_id, accidents
  from (
      select month_id, accidents,
             dense_rank() over (order by accidents desc) rnk
      from (
          select TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English') as month_id, count(*) as accidents
-          from cr_nehody acc JOIN CR_PRITOMNOST_ALKO
+          from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco ON acc.id_alko_prit = alco.id_stav
            where extract(year from acc.cas)=2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
             group by TO_CHAR(acc.cas, 'Month','NLS_DATE_LANGUAGE=English')
        )
-) where rnk = 3;
+) where rnk <= 3;
 
      
  --v4: cost: 2444 | vyuzitie analytickej funkcie dense_rank a analytickej funkcie count namiesto agregacnej count
-SELECT 'Top 3. most accidents (2024): ' as description, month_id, accidents
+SELECT month_id, accidents
  FROM
 (
 	 select distinct month_id, accidents
@@ -138,7 +156,7 @@ SELECT 'Top 3. most accidents (2024): ' as description, month_id, accidents
 	          from cr_nehody acc JOIN CR_PRITOMNOST_ALKO alco ON acc.ID_ALKO_PRIT = alco.ID_STAV
 	           WHERE EXTRACT(YEAR FROM acc.cas) = 2024 AND alco.PRITOMNY IS NOT NULL AND alco.PRITOMNY LIKE 'A'
 	       )
-	) where rnk = 3
+	) where rnk <= 3
 );
 
 --===================================================================================================
