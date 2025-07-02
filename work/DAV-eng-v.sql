@@ -377,7 +377,7 @@ SELECT * FROM
 -- in which hours has occured most accidents related to alcohol
 -- TODO: histogram
 SELECT	count(*) AS cnt,
-		EXTRACT(HOUR FROM acc.cas) AS hr
+		EXTRACT(HOUR FROM acc.cas) AS iHour
  FROM cr_nehody acc
  JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav
   WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND alco.pritomny LIKE 'A'
@@ -398,8 +398,56 @@ SELECT	count(*) AS cnt,
   WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND alco.pritomny LIKE 'A'
   GROUP BY to_char(acc.cas, 'Day')
    ORDER BY cnt desc;
-   
-SELECT acc.poc_vozidiel AS vehicles_per_acc, dense_rank() OVER (ORDER BY acc.poc_vozidiel desc)
- FROM cr_nehody acc
- JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav
-  WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND alco.pritomny LIKE 'A';
+
+SELECT	region_id, region_name, cnt, ihour, rnk
+FROM
+(
+	SELECT	region_id, region_name, cnt, ihour,
+			row_number() OVER (PARTITION BY region_id ORDER BY cnt desc) AS rnk
+	FROM
+	(
+		SELECT	regions.id_kraj AS region_id,
+				regions.nazov AS region_name,
+				count(*) AS cnt,
+				EXTRACT(HOUR FROM acc.cas) AS iHour
+		 FROM cr_nehody acc
+		 JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav
+		 JOIN cr_kraje regions ON acc.id_kraj = regions.id_kraj
+		  WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND alco.pritomny LIKE 'A'
+		  GROUP BY EXTRACT(HOUR FROM acc.cas), regions.id_kraj, regions.nazov
+		   ORDER BY cnt DESC
+	)
+) WHERE rnk <= 3
+  ORDER BY rnk, region_id;
+ 
+  
+-- 3 most accidental hours in each region
+  
+-- amount of accidents with alcohol usage per distinct cases of cars related to one accident
+WITH vehicles_amount AS (
+	SELECT vehicles_per_acc, count(*) AS nr_of_cases
+	 FROM
+	(
+		SELECT acc.poc_vozidiel AS vehicles_per_acc
+		 FROM cr_nehody acc
+		 JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav
+		  WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND alco.pritomny LIKE 'A'
+	) GROUP BY vehicles_per_acc
+)
+SELECT vehicles_per_acc, nr_of_cases, RANK() OVER (ORDER BY nr_of_cases desc) AS rnk
+ FROM vehicles_amount;
+
+-- average amount of cars on accident with alcohol usage
+WITH vehicles_amount AS (
+	SELECT vehicles_per_acc, count(*) AS nr_of_cases
+	 FROM
+	(
+		SELECT acc.poc_vozidiel AS vehicles_per_acc
+		 FROM cr_nehody acc
+		 JOIN cr_pritomnost_alko alco ON acc.id_alko_prit = alco.id_stav
+		  WHERE EXTRACT(YEAR FROM acc.cas)=2024 AND alco.pritomny LIKE 'A'
+	) GROUP BY vehicles_per_acc
+)
+SELECT round(sum(vehicles_per_acc*nr_of_cases)/sum(nr_of_cases), 3) || ' vehicles per accident with alcohol in 2024' AS wavg
+ FROM vehicles_amount;
+
