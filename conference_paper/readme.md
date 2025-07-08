@@ -1,1 +1,1 @@
-This part was added later. **Conference paper** has been written, which is **focused on** accidents at which was found **alcohol in the blood**.
+This part was added later. The **conference paper** **focuses** on accidents in which **alcohol** was **found in the blood**
